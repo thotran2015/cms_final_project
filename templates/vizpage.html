@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html>
+<head>
+   <link href="static/bootstrap.min.css" rel="stylesheet" media="screen">
+</head>
+<body>
+  <a href="/" class="btn btn-info" role="button">Go Back</a>
+  <script type="text/javascript" src="static/viz/dat.gui.js"></script>
+        <script src="static/viz/three.js"></script>
+        <script src="static/viz/d3.min.js" charset="utf-8"></script>
+        <script src="static/viz/OrbitControls.js"></script>
+         
+  <script type="text/javascript">
+    ///////SETTING UP THE GRAPHIC USER INTERFACE
+    //initialize object guiParams to hold the GUI parameters
+    var guiParams = {
+        animation: true, //checkbox controlling whether the visualization spins
+        CheckUncheckAll: true, //toggle to check or uncheck all of the tags
+    };
+
+    var gui = new dat.gui.GUI();
+    //gui.remember(guiParams);
+    gui.add(guiParams, 'animation');
+    
+
+    //emotions in their own folder:
+    var f2 = gui.addFolder('Emotion to Color By');
+    f2.open();
+    //tags in their own folder:
+    var f1 = gui.addFolder('Tags');
+    
+
+    var controller = f1.add(guiParams, 'CheckUncheckAll');
+
+    //unpack the list of tags and emotions
+    var taglist=[];
+    var moodlist = [];
+    {% for ta in apptags %}
+      taglist.push('{{ta}}')
+    {% endfor %}
+    {% for emo in appemos %}
+      moodlist.push('{{emo}}')
+    {% endfor %}
+
+    //add tag checkboxes for each tag in the list
+    tagslistener=[];
+    for (i = 0; i < taglist.length; i++) {
+        guiParams[taglist[i]]=true;
+        var newobj = f1.add(guiParams,taglist[i]).listen();
+        tagslistener.push(newobj)
+    }
+
+    //allow the CheckUncheckAll box to toggle all the tags
+    controller.onFinishChange(function(value) {
+
+        for (i = 0; i < taglist.length; i++) {
+            guiParams[taglist[i]] = value;
+        }
+        replot();
+    });
+
+
+    //add emotion checkboxes
+    var colormoodindex = 0; //important: keeps track of which mood is checked.
+    moodlistener=[];
+    for (i = 0; i < moodlist.length; i++) {
+        guiParams[moodlist[i]]=(i==0);
+        var newobj = f2.add(guiParams,moodlist[i]).listen().onChange(function(){setChecked(moodlistener)});
+        moodlistener.push(newobj)
+    }
+
+    //ensure only one emotion is ever checked at once
+    function setChecked(moodlistener){
+      for (i = 0; i < moodlist.length; i++) {
+        if (guiParams[moodlist[i]] == moodlistener[i].__prev){
+          guiParams[moodlist[i]]=false;
+        }
+        else {
+          colormoodindex=i;
+        }
+      }
+    }
+
+
+
+    ///MAKING THE SCATTER PLOT//////////////////
+    var scene = new THREE.Scene();
+    var camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 1000 );
+
+    var renderer = new THREE.WebGLRenderer();
+    renderer.setSize( window.innerWidth, window.innerHeight );
+    document.body.appendChild( renderer.domElement );
+
+    
+
+    function v(x,y,z){ return new THREE.Vector3(x,y,z); }
+    var PARTICLE_SIZE =   100;
+    var MAX_EMOTION = 100;
+    var materi = new THREE.ParticleBasicMaterial({color: 0x88ffff, size: 1.5});
+     var indexes = [0,1,2];
+
+    
+
+    tagPointMap = new Map();
+    for (i = 0; i < taglist.length; i++) {
+        currentag=taglist[i];
+        tagPointMap.set(currentag, []);
+    }
+
+    //fetch data from database on the fly
+    window.MOOD_DATA=[];
+    var allcoords=[];
+
+    {% for sub in submissions %}
+      var subtags=[];
+      var subemos=[];
+      var subcoords=[];
+      {% for ta in sub.tags %}
+        subtags.push('{{ta}}')
+      {% endfor %}
+      {% for emo in sub.emos %}
+        subemos.push({{emo}})
+      {% endfor %}
+      {% for coord in sub.coords %}
+        subcoords.push({{coord}})
+      {% endfor %}
+      var submit = {coords: subcoords, emos: subemos, tags: subtags}
+      window.MOOD_DATA.push(submit)
+      allcoords.push(subcoords)
+    {% endfor %}
+
+var scales = indexes.map(function (idx) {
+      return d3.scale.sqrt()
+          .domain(d3.extent(allcoords, function (d) { return d[idx]; }))
+          .range([-50, 50]);
+    });
+
+     MOOD_DATA.forEach(function (d, i) {
+       var x = scales[0]((d.coords[indexes[0]]));
+       var y = scales[1]((d.coords[indexes[1]]));
+       var z = scales[2]((d.coords[indexes[2]]));
+       for (j = 0; j < d.tags.length; j++) {
+        if( tagPointMap.has(d.tags[j])){ //shouldn't be necessary, but here to avoid undefined error
+         tagPointMap.get(d.tags[j]).push({pos: v(x,y,z), emos: d.emos});
+         
+        }
+        if (j==d.tags.length-1){
+            var latestPoint={pos: v(x,y,z), emos: d.emos}
+         }
+       }
+     });
+
+     d=MOOD_DATA[MOOD_DATA.length-1]
+     var x = scales[0]((d.coords[indexes[0]]));
+     var y = scales[1]((d.coords[indexes[1]]));
+     var z = scales[2]((d.coords[indexes[2]]));
+     var latestPoint={pos: v(x,y,z), emos: d.emos}
+
+    
+      var sparkTexture = new THREE.TextureLoader().load("https://i.imgur.com/dVrOjf7.png"); 
+      var lTexture = new THREE.TextureLoader().load("https://i.imgur.com/zKr4Lwg.png");
+      var snowTexture = new THREE.TextureLoader().load("https://i.imgur.com/GH6Dq76.png");//https://i.imgur.com/opJ6phS.png"); //https://i.imgur.com/cprucik.png"); 
+
+      
+    
+      //
+
+    function makescatterPlot(tagPointMap,scene){
+      
+      var pointGeo= new THREE.BufferGeometry();
+      var positions = [];
+      var colors=[];
+      var sizes= [];
+      var color = new THREE.Color();
+      //var colormoodindex = moodlistener.findIndex(x => x.__prev==true);
+      //console.log(colormoodindex)
+       for (j = 0; j < taglist.length; j++) {
+          if (guiParams[taglist[j]]){
+            for (i=0; i< tagPointMap.get(taglist[j]).length; i++){
+                currentp=tagPointMap.get(taglist[j])[i]
+                positions.push(currentp.pos.x, currentp.pos.y, currentp.pos.z)
+                var pemo=currentp.emos[colormoodindex];
+                color.setRGB(1-pemo/MAX_EMOTION,pemo/MAX_EMOTION,0);
+                colors.push(color.r,color.g,color.b);
+                sizes.push(Math.random()*PARTICLE_SIZE*2)
+            }
+          }
+      }
+
+      pointGeo.addAttribute('position', new THREE.Float32BufferAttribute(positions,3));
+      pointGeo.addAttribute('color', new THREE.Float32BufferAttribute( colors, 3 ) );
+      pointGeo.addAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+
+      pointGeo.computeBoundingSphere();
+
+      var mat3 = new THREE.PointsMaterial( { size: PARTICLE_SIZE, vertexColors: THREE.VertexColors, map: lTexture, blending: THREE.AdditiveBlending, transparent: true, depthTest: false } );
+   
+      var material = new THREE.PointsMaterial( { size: PARTICLE_SIZE, vertexColors: THREE.VertexColors } );
+      points = new THREE.Points( pointGeo, mat3);
+      scene.add( points );
+
+      // highlight last point:
+      var lgeometry = new THREE.Geometry();
+      lgeometry.vertices.push(latestPoint.pos)
+      var lcol = new THREE.Color(1-latestPoint.emos[colormoodindex]/MAX_EMOTION,latestPoint.emos[colormoodindex]/MAX_EMOTION,0);
+      var lmaterial = new THREE.PointsMaterial({size: 5*PARTICLE_SIZE, color: lcol, map: lTexture, blending: THREE.AdditiveBlending, transparent: true, depthTest: false } );
+
+      
+      //var spheregeometry = new THREE.SphereGeometry( 0.5*PARTICLE_SIZE, 32, 32 );
+      //var spherematerial = new THREE.MeshBasicMaterial( {color: lcol, blending: THREE.AdditiveBlending});
+      //var sphere = new THREE.Mesh( geometry, material );
+      //sphere.position.set(latestPoint.pos.x,latestPoint.pos.y,latestPoint.pos.z);
+      //scene.add( sphere );
+
+      var starField = new THREE.Points(lgeometry, lmaterial);
+      
+      scene.add(starField);
+
+      // var scatterPlot = new THREE.Object3D();
+      // scene.add(scatterPlot);
+      // pointGeo= new THREE.Geometry();
+      // for (j = 0; j < taglist.length; j++) {
+      //     if (guiParams[taglist[j]]){
+      //       for (i=0; i< tagPointMap.get(taglist[j]).length; i++){
+      //           pointGeo.tagPointMap.push(tagPointMap.get(taglist[j])[i])
+      //       }
+      //     }
+      // }
+      // scatterPlot.add(new THREE.ParticleSystem(pointGeo, materi));
+    }
+      
+    makescatterPlot(tagPointMap,scene)
+
+
+
+
+    camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 0.1, 1000 );
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.position.x = 0;
+    camera.position.y = 600;
+    camera.position.z = 300;
+    camera.lookAt(scene.position);
+
+    // controls = new THREE.TrackballControls( camera );
+    //             controls.rotateSpeed = 1.0;
+    //             controls.zoomSpeed = 1.2;
+    //             controls.panSpeed = 0.8;
+    //             controls.noZoom = false;
+    //             controls.noPan = false;
+    //             controls.staticMoving = true;
+    //             controls.dynamicDampingFactor = 0.3;
+    //             controls.keys = [ 65, 83, 68 ];
+    //             controls.addEventListener( 'change', render );
+    controls = new THREE.OrbitControls( camera, renderer.domElement );
+        controls.addEventListener( 'change', render );
+        //controls.maxPolarAngle = Math.PI / 2;
+        controls.enableZoom = false;
+        controls.enablePan = false;
+
+    function render() {
+                renderer.render( scene, camera );
+
+            }
+    function onWindowResize() {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize( window.innerWidth, window.innerHeight );
+                render();
+            }
+    window.addEventListener( 'resize', onWindowResize, false );
+
+    function replot(){
+        while(scene.children.length > 0){
+                    scene.remove(scene.children[0]);
+                }
+                makescatterPlot(tagPointMap,scene);
+                render();
+    }
+
+    function guiUpdate() {
+        //refresh if you change the tags
+        for (i=0; i<tagslistener.length; i++){
+            tagslistener[i].onFinishChange(function(value){
+                replot();
+                    });
+        }
+        for (i=0; i<moodlistener.length; i++){
+            moodlistener[i].onFinishChange(function(value){
+                replot();
+                
+                    });
+        }
+    }
+    
+      
+
+    theta=0;
+    function animate(t) {
+
+      // update the aspect ratio and renderer size in case the window was resized
+      // camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 0.1, 1000 );
+      // renderer.setSize(window.innerWidth, window.innerHeight);
+      // spin the camera in a circle
+      if (guiParams.animation){
+        theta=Math.atan(camera.position.x/camera.position.z)
+        theta = theta+1/300
+        camera.position.x = Math.sin(theta)*300;
+        //camera.position.y = 100;
+        camera.position.z = Math.cos(theta)*300;
+      }
+
+      // point the camera at the origin
+
+      camera.fov = 10;//*(2-guiParams.zoom);
+      camera.updateProjectionMatrix();
+      // render the scene again
+      render();
+      // request the next animation frame to render again
+      window.requestAnimationFrame(animate, renderer.domElement);
+      controls.update();
+
+        };
+
+    animate(new Date().getTime());
+    guiUpdate();
+
+  </script>
+</body>
+</html>
